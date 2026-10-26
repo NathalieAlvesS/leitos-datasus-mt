@@ -1,0 +1,1103 @@
+---
+title: "Descritivas-series temporais"
+author: "Nathalie Alves"
+date: "2026-07-16"
+output: html_document
+---
+
+```{r}
+library(readxl)
+library(tidyverse)   # Manipulação e visualização de dados
+library(readxl)      # Leitura de arquivos Excel
+library(forecast)    # Funções para análise de séries temporais
+library(TSA)         # Métodos adicionais para séries temporais
+library(trend)       # Testar de Tendencia
+
+```
+
+
+
+```{r}
+dados<-read_excel("C:/Users/UFMT/Documents/Projeto series/leitos-datasus.xlsx")
+head(dados)
+attach(dados)
+```
+
+=============================================================
+# DESCRIÇÃO E CONFERÊNCIA DA BASE
+#=============================================================
+
+```{r}
+
+# Estrutura da base
+glimpse(dados)
+
+```
+
+```{r}
+# Nomes das variáveis
+names(dados)
+```
+
+```{r}
+# Primeiras e últimas observações
+head(dados)
+tail(dados)
+
+```
+
+
+
+```{r}
+
+# Número de linhas e colunas
+dim(dados)
+
+```
+
+```{r}
+# Quantidade de valores ausentes por variável
+colSums(is.na(dados))
+```
+
+```{r}
+
+# Verificar períodos duplicados
+anyDuplicated(dados$`Ano_mês compet.`)
+```
+
+```{r}
+
+# Verificar períodos duplicados
+anyDuplicated(dados$`Ano_mês compet.`)
+```
+
+
+
+```{r}
+#=============================================================
+# ESTATÍSTICAS DESCRITIVAS DOS LEITOS
+#=============================================================
+
+summary(dados)
+```
+
+
+```{r}
+# Competência com menor quantidade de leitos
+dados$`Ano_mês compet.`[
+  which.min(dados$Qtd_existente)
+]
+
+# Competência com maior quantidade de leitos
+dados$`Ano_mês compet.`[
+  which.max(dados$Qtd_existente)
+]
+
+```
+
+
+```{r}
+source("funcoes.R") 
+```
+
+
+
+```{r}
+dados_taxa <- dados %>%
+  mutate(
+    taxa_leitos_1000 = (Qtd_existente / População_estimada
+                        ) * 1000
+  )
+```
+
+
+
+```{r}
+summary(dados_taxa)
+```
+
+```{r}
+library(writexl)
+
+
+dados_numericos <- dados_taxa %>%
+  select(where(is.numeric))
+
+# Calcular as estatísticas descritivas
+tabela_descritiva <- dados_numericos %>%
+  summarise(
+    across(
+      everything(),
+      list(
+        N = ~ sum(!is.na(.)),
+        Mínimo = ~ min(., na.rm = TRUE),
+        `1º quartil` = ~ quantile(., 0.25, na.rm = TRUE),
+        Mediana = ~ median(., na.rm = TRUE),
+        Média = ~ mean(., na.rm = TRUE),
+        `3º quartil` = ~ quantile(., 0.75, na.rm = TRUE),
+        Máximo = ~ max(., na.rm = TRUE),
+        `Desvio-padrão` = ~ sd(., na.rm = TRUE)
+      ),
+      .names = "{.col}__{.fn}"
+    )
+  ) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("Variável", "Estatística"),
+    names_sep = "__",
+    values_to = "Valor"
+  ) %>%
+  pivot_wider(
+    names_from = Variável,
+    values_from = Valor
+  )
+
+#
+tabela_descritiva <- tabela_descritiva %>%
+  mutate(
+    across(
+      where(is.numeric),
+      ~ round(.x, 3)
+    )
+  )
+
+
+write_xlsx(
+  tabela_descritiva,
+  path = "estatisticas_descritivas_leitos.xlsx"
+)
+
+
+```
+
+
+
+```{r}
+# Converter os dados em uma série temporal (mensal, começando em 2006)
+y1 = ts(dados_taxa$taxa_leitos_1000, start = 2006, frequency = 12)
+y1
+```
+
+
+```{r}
+#-------------------------------------------------------------
+# VISUALIZAÇÃO DA SÉRIE
+#-------------------------------------------------------------
+
+plot(
+  y1,
+  xlab = "Tempo",
+  ylab = "Quantidade mensal de leitos existentes"
+)
+```
+
+
+```{r}
+#-------------------------------------------------------------
+# ANÁLISE DA ESTABILIDADE DA VARIÂNCIA (BOX-COX)
+#-------------------------------------------------------------
+
+lambda <- BoxCox.ar(
+  y1,
+  lambda = seq(-3, 3, 0.01),
+  method = "yw"
+)
+
+lambda$mle
+lambda$ci
+```
+
+Pela imagem foi possivel ver que o valor 1 não esta contido, portanto será preciso uma transformação 
+
+
+```{r}
+
+y2 <- BoxCox(y1, lambda$mle)
+y2 <- as.ts(y2)
+
+lambda_y2 <- BoxCox.ar(
+  y2,
+  lambda = seq(-3, 3, 0.01),
+  method = "yw"
+)
+
+lambda_y2$mle
+lambda_y2$ci
+```
+
+Agora o numero 1 faz parte do intervalo.
+
+```{r}
+
+# Visualização da série transformada
+plot(y2, main = "Série transformada (Box-Cox)")
+```
+
+```{r}
+#-------------------------------------------------------------
+# TESTE DE TENDÊNCIA
+#-------------------------------------------------------------
+
+cs.test(y2)
+```
+se valor-p < 0,05, rejeitamos H0: a série apresenta tendência;
+
+se valor-p > 0,05, não rejeitamos H0: não há evidência estatística de tendência.
+
+O valor de-p encontrado < 2.2e-16. Série apresenta tendência.
+
+```{r}
+
+
+# Aplicar a diferença na série
+y3 = diff(y2)
+
+# Testar se a série diferenciada ainda apresenta tendência
+cs.test(y3)
+
+```
+
+```{r}
+plot(y3, main = "Série sem tendência")
+```
+
+Como valor-p > 0,05, confirmada a retirada da tendência. Foi feito apenas uma unica diferenciação na série para a remoção da tendência.
+
+
+
+
+```{r}
+#-------------------------------------------------------------
+# TESTE DE SAZONALIDADE
+#-------------------------------------------------------------
+
+# Obter periodograma
+P = periodograma(y3)
+
+plot(P, type = "l")
+
+# Teste de Fisher
+Fisher.test(P)
+```
+
+se valor-p < 0,05, rejeitamos H0: existe evidência de sazonalidade;
+se valor-p > 0,05, não rejeitamos H0: não existe evidência estatística suficiente de sazonalidade.
+
+Nosso valor-p = 1. Não existe sazonalidade na série.
+
+
+
+```{r}
+
+par(mfrow=c(1,2)) #plotar dois graficos lado a lado
+acf(y3)
+pacf(y3)
+
+```
+
+
+Como temos tendencia e não temos sazonalidade, os melhores modelos: Suavização:Suavização Holt. 
+e familia arima: Modelo Arima.
+
+
+--------------------------------------MODELO DE SUAVIZAÇÃO -----------------------------------------------------------
+
+
+```{r}
+#=============================================================
+# MODELO DE SUAVIZAÇÃO EXPONENCIAL DE HOLT (SEH)
+#=============================================================
+
+# Ajustar o modelo de Holt na série original
+holt_model <- ets(
+  y1,
+  model = "AAN",
+  lambda = lambda$mle
+)
+
+# Exibir o modelo ajustado
+holt_model
+```
+O que essa saída indica
+ETS(A,A,N): erro aditivo, tendência aditiva e ausência de sazonalidade.
+λ = 0,9: transformação Box-Cox leve.
+α = 0,8055: o nível do modelo reage bastante às observações mais recentes.
+β = 0,0001: a tendência praticamente não é atualizada.
+b = −0,0016: foi estimada uma tendência levemente decrescente.
+AIC = −517,96: será usado depois para comparação; isoladamente não diz se o modelo é bom.
+
+
+
+
+```{r}
+accuracy(holt_model)
+```
+ME ≈ 0: não há viés relevante; o modelo não tende a superestimar nem subestimar.
+RMSE = 0,0232 e MAE = 0,0154: erros médios baixos na escala utilizada pelo modelo.
+MPE ≈ 0: praticamente ausência de erro percentual sistemático.
+MAPE = 0,717%: em média, os valores ajustados diferem menos de 1% dos observados.
+MASE = 0,397: excelente, pois é menor que 1; o Holt apresenta erro menor que o método ingênuo.
+ACF1 = 0,015: autocorrelação residual de primeira ordem praticamente nula.
+
+O modelo de Holt apresentou bom ajuste aos dados, com erro percentual absoluto médio de aproximadamente 0,72% e MASE inferior a 1, indicando desempenho superior ao método ingênuo. Além disso, o erro médio próximo de zero sugere ausência de viés sistemático, enquanto a baixa autocorrelação de primeira ordem indica pouca dependência residual imediata.
+
+
+
+```{r}
+
+# Previsão para os próximos 10 períodos
+p=predict(holt_model, 10, prediction.interval = TRUE)
+p
+
+```
+
+
+```{r}
+
+# Plotar o modelo ajustado
+plot_pred(holt_model,h=12)
+
+```
+
+
+```{r}
+
+# Avaliação do resíduo
+# Extraindo os resíduos
+residuos <- residuals(holt_model)
+```
+
+
+```{r}
+# Plotar os resíduos
+plot(residuos, main="Resíduos do Modelo SES", xlab="Tempo", ylab="Resíduos")
+abline(h=0, col="red")
+```
+
+
+
+```{r}
+
+# Análise de autocorrelação dos resíduos
+acf(residuos, main="ACF dos Resíduos do Modelo SES")
+
+box_pierce_plot(residuos)
+```
+
+
+Apesar das boas métricas de ajuste, a FAC dos resíduos apresentou autocorrelação significativa no lag 12, resultado confirmado pelo teste de Box-Pierce. Portanto, os resíduos não se comportam integralmente como ruído branco, indicando uma limitação do modelo de Holt.
+
+
+```{r}
+#-------------------------------------------------------------
+# GRÁFICO DO AJUSTE DO MODELO DE HOLT
+#-------------------------------------------------------------
+
+plot(
+  y1,
+  type = "l",
+  col = "black",
+  lwd = 1,
+  main = "Serie observada e valores ajustados pelo modelo de Holt",
+  xlab = "Tempo",
+  ylab = "Leitos por mil habitantes"
+)
+
+lines(
+  fitted(holt_model),
+  col = "lightblue",
+  lwd = 2
+)
+
+legend(
+  "topright",
+  legend = c("Valores observados", "Valores ajustados"),
+  col = c("black", "lightblue"),
+  lty = 1,
+  lwd = c(1, 2),
+  bty = "n"
+)
+```
+
+O modelo de Holt apresentou boa capacidade de ajuste, pois os valores estimados acompanharam de perto os valores observados ao longo de todo o período. Entretanto, o diagnóstico residual mostrou autocorrelação significativa no lag 12, indicando que ainda existe dependência temporal não capturada pelo modelo.
+
+
+
+---------------------------------------- MODELO ARIMA ----------------------------------------------------------------
+
+```{r}
+# Modelo ARIMA(1,1,0)
+m1 <- Arima(
+  y1,
+  order = c(1, 1, 0),
+  lambda = lambda$mle
+)
+
+# Modelo ARIMA(0,1,1)
+m2 <- Arima(
+  y1,
+  order = c(0, 1, 1),
+  lambda = lambda$mle
+)
+
+# Modelo ARIMA(1,1,1)
+m3 <- Arima(
+  y1,
+  order = c(1, 1, 1),
+  lambda = lambda$mle
+)
+```
+
+
+```{r}
+summary.arima(m1)
+summary.arima(m2)
+summary.arima(m3)
+```
+
+
+
+```{r}
+AIC(m1)
+AIC(m2)
+AIC(m3)
+
+BIC(m1)
+BIC(m2)
+BIC(m3)
+```
+
+
+
+O modelo ARIMA(1,1,1) foi selecionado provisoriamente por apresentar parâmetros estatisticamente significativos e os menores valores de AIC e BIC entre os candidatos avaliados. Embora o ARIMA(1,1,0) tenha apresentado MAPE e MASE ligeiramente menores, as diferenças foram pequenas, enquanto o ARIMA(1,1,1) apresentou melhor critério global de ajuste.
+
+
+
+
+```{r}
+### Ajuste do modelo ARIMA(1,1,0) com lambda = 0 (log aplicado)
+
+arima_model <- Arima(
+  y1,
+  order = c(1, 1, 1),
+  lambda = lambda$mle
+)
+
+arima_model
+summary.arima(arima_model)
+```
+O modelo ARIMA(1,1,1) apresentou bom desempenho no conjunto de treinamento. O erro médio próximo de zero indicou ausência de viés sistemático relevante, embora os sinais negativos do ME e do MPE apontem uma leve tendência de superestimação. O MAPE de aproximadamente 0,72% revelou baixa diferença percentual entre os valores observados e ajustados. Além disso, o MASE de 0,4004, inferior a 1, mostrou que o modelo apresentou desempenho superior ao método ingênuo de referência.
+
+
+
+```{r}
+plot(
+  y1,
+  type = "l",
+  col = "black",
+  lwd = 1,
+  main = "Serie observada e valores ajustados pelo ARIMA(1,1,1)",
+  xlab = "Tempo",
+  ylab = "Leitos por mil habitantes"
+)
+
+lines(
+  fitted(arima_model),
+  col = "lightblue",
+  lwd = 2
+)
+
+legend(
+  "topright",
+  legend = c("Valores observados", "Valores ajustados"),
+  col = c("black", "lightblue"),
+  lty = 1,
+  lwd = c(1, 2),
+  bty = "n"
+)
+```
+
+O gráfico de ajuste mostra que os valores estimados pelo modelo ARIMA(1,1,1) acompanharam de forma bastante próxima os valores observados ao longo do período analisado. O modelo conseguiu representar adequadamente a tendência e as principais oscilações da série, embora tenha apresentado pequenas diferenças em alguns picos e variações mais abruptas. Dessa forma, o ajuste visual confirma o bom desempenho indicado pelas métricas de erro.
+
+
+
+
+
+
+```{r}
+# Previsoes para os proximos 10 meses
+previsao_arima <- forecast(
+  arima_model,
+  h = 10,
+  level = 95
+)
+
+previsao_arima
+```
+
+
+
+```{r}
+plot_pred(
+  arima_model,
+  h = 10
+)
+```
+
+
+As previsões do modelo ARIMA(1,1,1) indicam estabilidade da série em torno de 2,02 leitos por mil habitantes nos próximos períodos. Os intervalos de previsão tornam-se progressivamente mais amplos à medida que o horizonte aumenta, refletindo o crescimento da incerteza das estimativas futuras. Assim, embora a previsão pontual permaneça relativamente estável, existe possibilidade de oscilações em torno desse nível.
+
+
+
+```{r}
+#-------------------------------------------------------------
+# DIAGNÓSTICO DOS RESÍDUOS DO ARIMA(1,1,1)
+#-------------------------------------------------------------
+
+residuos <- na.omit(rstandard(arima_model))
+
+acf(
+  residuos,
+  main = "ACF dos Resíduos do ARIMA(1,1,1)"
+)
+
+box_pierce_plot(residuos)
+
+```
+
+
+
+```{r}
+
+# Análise de autocorrelação dos resíduos
+acf(residuos, main = "ACF dos Resíduos do Modelo")
+residuals = residuos
+box_pierce_plot(residuos)  # Teste de Box-Pierce para verificar a independência dos resíduos
+
+```
+
+
+
+-----------------------------------COMPARAÇÃO DOS MODELOS-------------------------------------------------------------
+
+
+
+```{r}
+# Horizonte de previsao:
+# os ultimos 12 meses serao utilizados como conjunto de teste
+h <- 12
+
+# Numero total de observacoes da serie
+n <- length(y1)
+
+# Ultimo periodo que entrara no conjunto de treinamento
+fim_treino <- time(y1)[n - h]
+
+# Primeiro periodo que entrara no conjunto de teste
+inicio_teste <- time(y1)[n - h + 1]
+
+# Serie de treinamento
+y_treino <- window(
+  y1,
+  end = fim_treino
+)
+
+# Serie de teste: ultimos 12 meses observados
+y_teste <- window(
+  y1,
+  start = inicio_teste
+)
+
+# Utilizar o mesmo lambda estimado anteriormente
+lambda_comparacao <- lambda$mle
+
+# Conferencias
+lambda_comparacao
+length(y_treino)
+length(y_teste)
+start(y_teste)
+end(y_teste)
+```
+
+```{r}
+#-------------------------------------------------------------
+# AJUSTE DOS MODELOS NO CONJUNTO DE TREINAMENTO
+#-------------------------------------------------------------
+
+# Modelo de Holt:
+# A = erro aditivo
+# A = tendencia aditiva
+# N = sem sazonalidade
+holt_treino <- ets(
+  y_treino,
+  model = "AAN",
+  lambda = lambda_comparacao
+)
+
+# Modelo ARIMA(1,1,1)
+arima_treino <- Arima(
+  y_treino,
+  order = c(1, 1, 1),
+  lambda = lambda_comparacao
+)
+
+# Resultados dos modelos
+holt_treino
+arima_treino
+```
+
+```{r}
+#-------------------------------------------------------------
+# PREVISOES PARA OS 12 MESES DO CONJUNTO DE TESTE
+#-------------------------------------------------------------
+
+# Previsoes pelo modelo de Holt
+prev_holt <- forecast(
+  holt_treino,
+  h = h,
+  level = 95
+)
+
+# Previsoes pelo modelo ARIMA(1,1,1)
+prev_arima <- forecast(
+  arima_treino,
+  h = h,
+  level = 95
+)
+
+# Visualizar os valores previstos
+prev_holt
+prev_arima
+```
+
+
+```{r}
+#-------------------------------------------------------------
+# METRICAS DE DESEMPENHO FORA DA AMOSTRA
+#-------------------------------------------------------------
+
+# Metricas do modelo de Holt
+acc_holt <- accuracy(
+  prev_holt,
+  y_teste
+)
+
+# Metricas do ARIMA
+acc_arima <- accuracy(
+  prev_arima,
+  y_teste
+)
+
+# Apresentar os resultados
+round(acc_holt, 4)
+round(acc_arima, 4)
+```
+
+
+
+```{r}
+#-------------------------------------------------------------
+# FUNCAO PARA CALCULAR O RPE
+#-------------------------------------------------------------
+
+calcular_rpe <- function(observado, previsto) {
+
+  # Converter os objetos ts em vetores numericos
+  observado <- as.numeric(observado)
+  previsto  <- as.numeric(previsto)
+
+  # Manter somente valores validos e diferentes de zero
+  validos <- is.finite(observado) &
+             is.finite(previsto) &
+             observado != 0
+
+  # Calcular o RPE em porcentagem
+  rpe <- 100 * sqrt(
+    mean(
+      (
+        (observado[validos] - previsto[validos]) /
+          observado[validos]
+      )^2
+    )
+  )
+
+  return(rpe)
+}
+
+# RPE do modelo de Holt
+rpe_holt <- calcular_rpe(
+  y_teste,
+  prev_holt$mean
+)
+
+# RPE do modelo ARIMA
+rpe_arima <- calcular_rpe(
+  y_teste,
+  prev_arima$mean
+)
+
+rpe_holt
+rpe_arima
+```
+
+
+```{r}
+#-------------------------------------------------------------
+# TABELA COMPARATIVA: HOLT VERSUS ARIMA
+#-------------------------------------------------------------
+
+comparacao_modelos <- data.frame(
+
+  Modelo = c(
+    "Holt",
+    "ARIMA(1,1,1)"
+  ),
+
+  RMSE = c(
+    acc_holt["Test set", "RMSE"],
+    acc_arima["Test set", "RMSE"]
+  ),
+
+  MAE = c(
+    acc_holt["Test set", "MAE"],
+    acc_arima["Test set", "MAE"]
+  ),
+
+  MAPE = c(
+    acc_holt["Test set", "MAPE"],
+    acc_arima["Test set", "MAPE"]
+  ),
+
+  MASE = c(
+    acc_holt["Test set", "MASE"],
+    acc_arima["Test set", "MASE"]
+  ),
+
+  RPE = c(
+    rpe_holt,
+    rpe_arima
+  ),
+
+  AIC = c(
+    holt_treino$aic,
+    AIC(arima_treino)
+  ),
+
+  AICc = c(
+    holt_treino$aicc,
+    arima_treino$aicc
+  ),
+
+  BIC = c(
+    holt_treino$bic,
+    BIC(arima_treino)
+  )
+)
+
+# Arredondar apenas as colunas numericas
+comparacao_modelos[-1] <- lapply(
+  comparacao_modelos[-1],
+  round,
+  digits = 4
+)
+
+comparacao_modelos
+```
+
+
+```{r}
+#-------------------------------------------------------------
+# RESIDUOS DOS MODELOS AJUSTADOS NO TREINO
+#-------------------------------------------------------------
+
+# Residuos do modelo de Holt
+residuos_holt <- na.omit(
+  residuals(holt_treino)
+)
+
+# Residuos padronizados do ARIMA
+residuos_arima <- na.omit(
+  rstandard(arima_treino)
+)
+```
+
+
+```{r}
+#-------------------------------------------------------------
+# DIAGNOSTICO DOS RESIDUOS DO HOLT
+#-------------------------------------------------------------
+
+plot(
+  residuos_holt,
+  type = "l",
+  main = "Residuos do modelo de Holt",
+  xlab = "Tempo",
+  ylab = "Residuos"
+)
+
+abline(
+  h = 0,
+  col = "red"
+)
+
+acf(
+  residuos_holt,
+  main = "ACF dos residuos do modelo de Holt"
+)
+
+box_pierce_plot(residuos_holt)
+```
+
+```{r}
+#-------------------------------------------------------------
+# DIAGNOSTICO DOS RESIDUOS DO ARIMA
+#-------------------------------------------------------------
+
+plot(
+  residuos_arima,
+  type = "l",
+  main = "Residuos do modelo ARIMA(1,1,1)",
+  xlab = "Tempo",
+  ylab = "Residuos"
+)
+
+abline(
+  h = 0,
+  col = "red"
+)
+
+acf(
+  residuos_arima,
+  main = "ACF dos residuos do modelo ARIMA(1,1,1)"
+)
+
+box_pierce_plot(residuos_arima)
+```
+
+
+
+```{r}
+#-------------------------------------------------------------
+# TESTE DE BOX-PIERCE NO LAG 12
+#-------------------------------------------------------------
+
+box_holt <- Box.test(
+  residuos_holt,
+  lag = 12,
+  type = "Box-Pierce"
+)
+
+box_arima <- Box.test(
+  residuos_arima,
+  lag = 12,
+  type = "Box-Pierce"
+)
+
+diagnostico_residuos <- data.frame(
+
+  Modelo = c(
+    "Holt",
+    "ARIMA(1,1,1)"
+  ),
+
+  Estatistica_Box_Pierce = c(
+    unname(box_holt$statistic),
+    unname(box_arima$statistic)
+  ),
+
+  Valor_p = c(
+    box_holt$p.value,
+    box_arima$p.value
+  ),
+
+  Conclusao = c(
+    ifelse(
+      box_holt$p.value > 0.05,
+      "Sem autocorrelacao significativa",
+      "Apresenta autocorrelacao residual"
+    ),
+
+    ifelse(
+      box_arima$p.value > 0.05,
+      "Sem autocorrelacao significativa",
+      "Apresenta autocorrelacao residual"
+    )
+  )
+)
+
+diagnostico_residuos$Estatistica_Box_Pierce <- round(
+  diagnostico_residuos$Estatistica_Box_Pierce,
+  4
+)
+
+diagnostico_residuos$Valor_p <- round(
+  diagnostico_residuos$Valor_p,
+  4
+)
+
+diagnostico_residuos
+```
+
+
+```{r}
+#-------------------------------------------------------------
+# COMPARACAO QUALITATIVA
+#-------------------------------------------------------------
+
+comparacao_qualitativa <- data.frame(
+
+  Modelo = c(
+    "Holt",
+    "ARIMA(1,1,1)"
+  ),
+
+  Interpretacao = c(
+    "Mais simples: nivel e tendencia",
+    "Mais tecnica: termos AR, diferenca e MA"
+  ),
+
+  Vantagem = c(
+    "Facilidade de interpretacao",
+    "Modela explicitamente a autocorrelacao"
+  ),
+
+  Limitacao = c(
+    "Nao modela diretamente termos AR e MA",
+    "Interpretacao menos intuitiva"
+  )
+)
+
+comparacao_qualitativa
+```
+
+----------------------------------------------OUTLIERS---------------------------------------------------------------
+
+
+
+```{r}
+#-------------------------------------------------------------
+# MODELO ARIMA(1,1,1) COM OUTLIERS
+#-------------------------------------------------------------
+
+require(tsoutliers)
+
+# Seu modelo original
+m1 <- arima_model
+
+
+```
+
+
+
+```{r}
+##### DETECTAR OUTLIERS NO MODELO ORIGINAL
+
+resid <- residuals(m1)
+
+pars <- coefs2poly(m1)
+
+out <- locate.outliers(resid, pars)
+
+out
+
+```
+
+
+```{r}
+##### ESTIMAR O EFEITO DOS OUTLIERS
+
+# Onde estão os outliers e qual o tipo
+mo <- outliers(out[, 1], out[, 2])
+
+mo
+```
+
+
+```{r}
+# Criar uma matriz para os efeitos dos outliers
+xreg <- outliers.effects(
+  mo,
+  length(y1)
+)
+
+```
+
+
+
+
+```{r}
+##### ESTIMAR O MODELO COM OS OUTLIERS
+
+m2 <- Arima(
+  y1,
+  order = c(1, 1, 1),
+  xreg = xreg,
+  lambda = lambda$mle
+)
+
+summary(m2)
+
+summary.arima(m2)
+
+```
+
+
+```{r}
+##### VERIFICAR SE AINDA EXISTEM OUTLIERS
+
+resid <- residuals(m2)
+
+pars <- coefs2poly(m2)
+
+out <- locate.outliers(resid, pars)
+
+out
+
+```
+
+
+```{r}
+##### DIAGNÓSTICO DOS RESÍDUOS DO MODELO COM OUTLIERS
+
+residuos <- na.omit(rstandard(m2))
+
+par(mfrow = c(1, 2))
+
+acf(
+  residuos,
+  main = "ACF dos Resíduos do ARIMA(1,1,1) com Outliers"
+)
+
+box_pierce_plot(residuos)
+
+par(mfrow = c(1, 1))
+
+```
+
+
+
+
+```{r}
+##### PREVISÃO
+
+plot_pred_out(
+  m2,
+  h = 12,
+  nivel_conf = 0.95,
+  xreg = xreg
+)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
